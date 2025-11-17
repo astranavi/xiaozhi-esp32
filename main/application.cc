@@ -9,6 +9,7 @@
 #include "mcp_server.h"
 #include "assets.h"
 #include "settings.h"
+#include "certificate_manager.h"
 
 #include <cstring>
 #include <esp_log.h>
@@ -396,6 +397,19 @@ void Application::Start() {
 
     // Initialize the protocol
     display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
+
+    // Initialize mTLS certificates for WebSocket if needed
+    if (ota.HasWebsocketConfig()) {
+        auto& cert_mgr = CertificateManager::GetInstance();
+        if (!cert_mgr.HasCertificates()) {
+            ESP_LOGW(TAG, "WebSocket protocol detected, checking mTLS certificates");
+            if (!cert_mgr.RequestCertificates()) {
+                ESP_LOGW(TAG, "Failed to request mTLS certificates, will attempt to continue");
+            }
+        } else {
+            ESP_LOGI(TAG, "mTLS certificates already available");
+        }
+    }
 
     // Add MCP common tools before initializing the protocol
     auto& mcp_server = McpServer::GetInstance();
