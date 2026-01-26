@@ -68,16 +68,7 @@
 #define KEY_DEBOUNCE_TIME_MS 50
 #define KEY_LONG_PRESS_TIME_MS 3000
 
-// IO-39 模拟开关芯片Audio输入开关信号
-#define SWITCH_INPUT_GPIO GPIO_NUM_39
-// IO-40 模拟开关芯片Audio输出开关信号
-#define SWITCH_OUTPUT_GPIO GPIO_NUM_40
-
-// IO-38 功放PA脚 PA打开时，低电平 PA关闭时，高电平
 #define AUDIO_CODEC_PA_GPIO GPIO_NUM_38
-#define AUDIO_CODEC_PA_GPIO_ENABLE_LEVEL  0
-#define AUDIO_CODEC_PA_GPIO_DISABLE_LEVEL 1
-
 
 #define AUDIO_SWITCH_ESP32S3_LEVEL 1      // ESP32S3使用高电平
 #define AUDIO_SWITCH_BLUETOOTH_LEVEL 0    // 经典蓝牙使用低电平
