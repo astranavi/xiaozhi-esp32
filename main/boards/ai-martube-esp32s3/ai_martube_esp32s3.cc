@@ -319,23 +319,6 @@ private:
     }
 
 
-    // 初始化功放PA-IO(AUDIO_CODEC_PA_GPIO)
-    void InitializeAudioSwitch()
-    {
-        gpio_config_t audio_switch_init_struct = {0};
-
-        audio_switch_init_struct.mode = GPIO_MODE_OUTPUT;
-        audio_switch_init_struct.pull_up_en = GPIO_PULLUP_DISABLE;
-        audio_switch_init_struct.pull_down_en = GPIO_PULLDOWN_DISABLE;
-        audio_switch_init_struct.pin_bit_mask = 1ull << AUDIO_CODEC_PA_GPIO;
-        ESP_ERROR_CHECK(gpio_config(&audio_switch_init_struct));
-        
-        // 上电后设置为高电平，使用蓝牙音频
-        gpio_set_level(AUDIO_CODEC_PA_GPIO, 1);
-        
-    }
-
-
     // 初始化电机控制IO：将GPIO配置为输出模式，初始状态为关闭电机
     void InitializeMotor()
     {
