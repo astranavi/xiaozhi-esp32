@@ -1137,6 +1137,7 @@ public:
             AUDIO_I2S_GPIO_DIN,
             AUDIO_CODEC_PA_GPIO,
             AUDIO_CODEC_ES8389_ADDR,
+            true,
             true);
         return &audio_codec;
     }
