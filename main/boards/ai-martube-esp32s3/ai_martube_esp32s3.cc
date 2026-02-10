@@ -113,7 +113,7 @@ private:
     bool to_open_audio = false;
     
     // 按键相关变量
-    uint8_t light_mode_ = 2;  // 灯光模式：0=灭, 1=30%亮度, 2=100%亮度
+    uint8_t light_mode_ = 0;  // 灯光模式：0=灭, 1=30%亮度, 2=100%亮度
 
     // 旋转编码器相关变量
     // 编码器实例
@@ -233,7 +233,7 @@ private:
             }
             // 提醒用户关机
             app.PlaySound(Lang::Sounds::OGG_POWEROFF);
-            vTaskDelay(pdMS_TO_TICKS(1000));
+            vTaskDelay(pdMS_TO_TICKS(3000));
             SetPowerState(false);
         });
 
@@ -463,6 +463,11 @@ private:
     // 电源控制函数
     void SetPowerState(bool power_on)
     {
+        if (!power_on) {
+            gpio_set_level(AUDIO_CODEC_PA_GPIO, 1);
+            vTaskDelay(pdMS_TO_TICKS(200));
+        }
+
         gpio_set_level(POWER_ON_CONTROL_GPIO, power_on ? 1 : 0);
         ESP_LOGI(TAG, "Power control set to %s", power_on ? "HIGH (ON)" : "LOW (OFF)");
     }
@@ -477,12 +482,14 @@ private:
                 .callback = [](void* arg) {
                     auto* self = static_cast<ai_martube_esp32s3*>(arg);
                     auto& app = Application::GetInstance();
-                    if (self->current_volume_ >= 100) {
-                        if (!self->bluetooth_mode_) {
-                            app.PlaySound(Lang::Sounds::OGG_MAXSOUND);
+                    if (app.GetDeviceState() != kDeviceStateSpeaking) {
+                        if (self->current_volume_ >= 100) {
+                            if (!self->bluetooth_mode_) {
+                                app.PlaySound(Lang::Sounds::OGG_MAXSOUND);
+                            }
+                        } else {
+                            app.PlaySound(Lang::Sounds::OGG_SOUNDSET);
                         }
-                    } else {
-                        app.PlaySound(Lang::Sounds::OGG_SOUNDSET);
                     }
                 },
                 .arg = this,
@@ -769,6 +776,13 @@ private:
                 extern const char _binary_low_battery_off_ogg_end[] asm("_binary_low_battery_off_ogg_end");
                 std::string_view low_battery_off_sound(_binary_low_battery_off_ogg_start, 
                                                        _binary_low_battery_off_ogg_end - _binary_low_battery_off_ogg_start);
+
+                // 等待大模型结束讲话（最多等待 5 秒，避免死循环）
+                int wait_count = 0;
+                while (app.GetDeviceState() == kDeviceStateSpeaking && wait_count < 50) {
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                    wait_count++;
+                }
                 // 切换esp32s3 音频输出通道
                 app.PlaySound(Lang::Sounds::OGG_BATTERYOFF);
                 vTaskDelay(pdMS_TO_TICKS(2000));
@@ -791,6 +805,14 @@ private:
                 extern const char _binary_low_battery_remind_ogg_end[] asm("_binary_low_battery_remind_ogg_end");
                 std::string_view low_battery_remind_sound(_binary_low_battery_remind_ogg_start, 
                                                           _binary_low_battery_remind_ogg_end - _binary_low_battery_remind_ogg_start);
+
+                // 等待大模型结束讲话（最多等待 5 秒，避免死循环）
+                int wait_count = 0;
+                while (app.GetDeviceState() == kDeviceStateSpeaking && wait_count < 50) {
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                    wait_count++;
+                }
+
                 // 切换esp32s3 音频输出通道
                 app.PlaySound(Lang::Sounds::OGG_BATTERYREMIND);
                 vTaskDelay(pdMS_TO_TICKS(2000));
@@ -807,6 +829,13 @@ private:
                 extern const char _binary_low_battery_remind_ogg_end[] asm("_binary_low_battery_remind_ogg_end");
                 std::string_view low_battery_remind_sound(_binary_low_battery_remind_ogg_start, 
                                                           _binary_low_battery_remind_ogg_end - _binary_low_battery_remind_ogg_start);
+                
+                // 等待大模型结束讲话（最多等待 5 秒，避免死循环）
+                int wait_count = 0;
+                while (app.GetDeviceState() == kDeviceStateSpeaking && wait_count < 50) {
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                    wait_count++;
+                }
 
                 // 切换esp32s3 音频输出通道
                 app.PlaySound(Lang::Sounds::OGG_BATTERYREMIND);
@@ -1031,8 +1060,6 @@ public:
                                 }
                                 first_connect_reminder = false;
                             }
-
-                            ESP_LOGI(TAG, "Device state changed to idle, switching to Bluetooth audio mode");
                         }
                         
                         last = cur;

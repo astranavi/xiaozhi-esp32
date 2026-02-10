@@ -57,6 +57,17 @@ Es8389AudioCodec::Es8389AudioCodec(void* i2c_master_handle, i2c_port_t i2c_port,
     output_dev_ = esp_codec_dev_new(&outdev_cfg);
     assert(output_dev_ != NULL);
 
+    // Modify the volume curve to match the ES8389 hardware range (-95.5dB to 32.0dB)
+    static esp_codec_dev_vol_map_t es8389_vol_map[] = {
+        { .vol = 0, .db_value = -50.0 },
+        { .vol = 100, .db_value = -0.0 },
+    };
+    esp_codec_dev_vol_curve_t es8389_vol_curve = {
+        .vol_map = es8389_vol_map,
+        .count = sizeof(es8389_vol_map) / sizeof(esp_codec_dev_vol_map_t),
+    };
+    ESP_ERROR_CHECK(esp_codec_dev_set_vol_curve(output_dev_, &es8389_vol_curve));
+
     esp_codec_dev_cfg_t indev_cfg = {
         .dev_type = ESP_CODEC_DEV_TYPE_IN,
         .codec_if = codec_if_,
@@ -161,7 +172,7 @@ void Es8389AudioCodec::EnableInput(bool enable) {
         if (input_reference_) {
             uint8_t reg_val = 0x1C;
             ctrl_if_->write_reg(ctrl_if_, 0x72, 1, &reg_val, 1);
-            reg_val = 0x11;
+            reg_val = 0x10;
             ctrl_if_->write_reg(ctrl_if_, 0x73, 1, &reg_val, 1);
         }else{
             ESP_ERROR_CHECK(esp_codec_dev_set_in_gain(input_dev_, input_gain_));
