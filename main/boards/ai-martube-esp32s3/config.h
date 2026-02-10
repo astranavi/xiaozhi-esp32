@@ -46,8 +46,8 @@
 // IO-8 EC11-A 
 // IO-12  EC11-B
 // 旋转编码器，用于音量调节
-#define ENCODER_A_GPIO GPIO_NUM_8
-#define ENCODER_B_GPIO GPIO_NUM_16
+#define ENCODER_A_GPIO GPIO_NUM_16
+#define ENCODER_B_GPIO GPIO_NUM_8
 #define ENCODER_DEBOUNCE_TIME_MS 5
 
 // IO-6  电源开机控制信号，高电平开机，低电平关机
