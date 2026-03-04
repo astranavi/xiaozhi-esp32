@@ -17,6 +17,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "settings.h"
+#include "device_state_event.h"
 
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -50,42 +51,6 @@ struct KeyEvent {
     int64_t timestamp;
 };
 
-class XL9555 : public I2cDevice
-{
-public:
-    XL9555(i2c_master_bus_handle_t i2c_bus, uint8_t addr) : I2cDevice(i2c_bus, addr)
-    {
-        WriteReg(0x06, 0x03);
-        WriteReg(0x07, 0xF0);
-    }
-
-    void SetOutputState(uint8_t bit, uint8_t level)
-    {
-        uint16_t data;
-        int index = bit;
-
-        if (bit < 8)
-        {
-            data = ReadReg(0x02);
-        }
-        else
-        {
-            data = ReadReg(0x03);
-            index -= 8;
-        }
-
-        data = (data & ~(1 << index)) | (level << index);
-
-        if (bit < 8)
-        {
-            WriteReg(0x02, data);
-        }
-        else
-        {
-            WriteReg(0x03, data);
-        }
-    }
-};
 
 class ai_martube_esp32s3 : public WifiBoard
 {
@@ -95,7 +60,6 @@ private:
     Button shutdown_button_;
     Button key_input_button_;
     LcdDisplay *display_;
-    XL9555 *xl9555_;
     Esp32Camera *camera_;
     GpioLed *pwm_led_;                     // 添加PWM LED成员变量
     esp_timer_handle_t volume_timer_ = nullptr; // 音量调节去抖定时器
@@ -141,6 +105,9 @@ private:
     int last_charge_level_ = -1;
     int charge_candidate_level_ = -1;
     int64_t charge_candidate_start_us_ = 0;
+    
+    // 用于等待设备状态变化的信号量
+    SemaphoreHandle_t speaking_end_semaphore_ = nullptr;
 
     void InitializeI2c()
     {
@@ -158,9 +125,6 @@ private:
             },
         };
         ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_));
-
-        // Initialize XL9555
-        // xl9555_ = new XL9555(i2c_bus_, 0x20);
     }
 
     static void BootBreathTimerCallback(void* arg)
@@ -270,22 +234,16 @@ private:
             // 蓝牙 -> AI：A5 00 02 06
             if (!bluetooth_mode_) {
                 // 设备状态设置为待机
-                auto& app = Application::GetInstance();
                 if (app.GetDeviceState() == kDeviceStateSpeaking) {
                     app.AbortSpeaking(kAbortReasonNone);
                 }
                 app.SetDeviceState(kDeviceStateIdle);
 
-                // 提醒用户切换到蓝牙模式
-                app.PlaySound(Lang::Sounds::OGG_BTMODE);
-                vTaskDelay(pdMS_TO_TICKS(2000));
-
-                
+                // 提醒用户切换到蓝牙模式，播放完成后关闭音频输出
+                app.GetAudioService().PlaySoundAndWait(Lang::Sounds::OGG_BTMODE, true);
                 // 切到蓝牙模式
                 uint8_t cmd[4] = {0xA5, 0x00, 0x02, 0x05};
                 if (uart_comm_ && uart_comm_->IsReady()) {
-                    uart_comm_->Send(cmd, sizeof(cmd));
-                    vTaskDelay(pdMS_TO_TICKS(100));
                     uart_comm_->Send(cmd, sizeof(cmd));
                 } else {
                     ESP_LOGW(TAG, "UART not ready, skip sending BT command");
@@ -295,24 +253,16 @@ private:
             } else {
                 // 提醒用户切换到 AI 模式
                 app.PlaySound(Lang::Sounds::OGG_AIMODE);
-                vTaskDelay(pdMS_TO_TICKS(2000));
-
                 
                 // 切到 AI 模式
                 uint8_t cmd[4] = {0xA5, 0x00, 0x02, 0x06};
                 if (uart_comm_ && uart_comm_->IsReady()) {
-                    uart_comm_->Send(cmd, sizeof(cmd));
-                    vTaskDelay(pdMS_TO_TICKS(100));
                     uart_comm_->Send(cmd, sizeof(cmd));
                 } else {
                     ESP_LOGW(TAG, "UART not ready, skip sending AI command");
                 }
                 ESP_LOGI(TAG, "Long press: switch to AI mode, sent A5 00 02 06");
                 bluetooth_mode_ = false;
-                std::string wake_word = "你好小王子";
-                ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
-                auto& app = Application::GetInstance();
-                app.WakeWordInvoke(wake_word);
             }
         });
 
@@ -329,7 +279,7 @@ private:
         motor_init_struct.pull_down_en = GPIO_PULLDOWN_DISABLE;
         motor_init_struct.pin_bit_mask = 1ull << MOTOR_CONTROL_GPIO;
         ESP_ERROR_CHECK(gpio_config(&motor_init_struct));
-        gpio_set_level(MOTOR_CONTROL_GPIO, MOTOR_CONTROL_DISABLE_LEVEL);
+        gpio_set_level(MOTOR_CONTROL_GPIO, MOTOR_CONTROL_ENABLE_LEVEL);
     }
     
 
@@ -529,10 +479,10 @@ private:
                     if (v != current_volume_) {
                         OnVolumeChange(v);
                         esp_timer_stop(volume_timer_);
-                        esp_timer_start_once(volume_timer_, 200000);
+                        esp_timer_start_once(volume_timer_, 500000);
                     } else if (hit_max && delta > 0) {
                          esp_timer_stop(volume_timer_);
-                         esp_timer_start_once(volume_timer_, 200000);
+                         esp_timer_start_once(volume_timer_, 500000);
                     }
                 }
 
@@ -557,6 +507,44 @@ private:
         
         // 更新内部音量状态
         current_volume_ = volume;
+    }
+
+    // 等待设备结束讲话状态（使用事件驱动替代轮询）
+    // 返回 true 表示设备已不在讲话状态，false 表示超时
+    bool WaitForSpeakingEnd(uint32_t timeout_ms)
+    {
+        auto& app = Application::GetInstance();
+        
+        // 如果当前不在讲话状态，直接返回
+        if (app.GetDeviceState() != kDeviceStateSpeaking) {
+            return true;
+        }
+        
+        // 创建信号量（如果尚未创建）
+        if (speaking_end_semaphore_ == nullptr) {
+            speaking_end_semaphore_ = xSemaphoreCreateBinary();
+        }
+        
+        // 注册状态变化回调
+        auto& event_manager = DeviceStateEventManager::GetInstance();
+        SemaphoreHandle_t sem = speaking_end_semaphore_;
+        
+        event_manager.RegisterStateChangeCallback([sem](DeviceState prev, DeviceState curr) {
+            // 当从讲话状态变为其他状态时，释放信号量
+            if (prev == kDeviceStateSpeaking && curr != kDeviceStateSpeaking) {
+                xSemaphoreGive(sem);
+            }
+        });
+        
+        // 再次检查状态（防止在注册回调期间状态已变化）
+        if (app.GetDeviceState() != kDeviceStateSpeaking) {
+            return true;
+        }
+        
+        // 等待信号量，带超时
+        BaseType_t result = xSemaphoreTake(speaking_end_semaphore_, pdMS_TO_TICKS(timeout_ms));
+        
+        return (result == pdTRUE);
     }
 
     // 初始化电池电量检测
@@ -608,7 +596,6 @@ private:
             int raw;
             ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle_, POWER_ADC_CHANNEL, &raw));
             adc_reading += raw;
-            vTaskDelay(pdMS_TO_TICKS(1));
         }
         adc_reading /= BATTERY_ADC_SAMPLES;
         
@@ -629,7 +616,6 @@ private:
             int raw;
             ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle_, BATTERY_ADC_CHANNEL, &raw));
             adc_reading += raw;
-            vTaskDelay(pdMS_TO_TICKS(1));
         }
         adc_reading /= BATTERY_ADC_SAMPLES;
         
@@ -754,8 +740,9 @@ private:
     {
         int64_t current_time = esp_timer_get_time();
         
-        // 每5秒检查一次电池状态
-        if (current_time - last_battery_check_time_ >= 5000000) {  // 5秒 = 5000000微秒
+        // 每20秒检查一次电池状态
+        if (current_time - last_battery_check_time_ >= 20000000) {  // 20秒 = 20000000微秒
+            WaitForSpeakingEnd(5000);
             battery_voltage_ = ReadBatteryVoltage();
             battery_percentage_ = CalculateBatteryPercentage(battery_voltage_);
             last_battery_check_time_ = current_time;
@@ -766,7 +753,7 @@ private:
             auto& app = Application::GetInstance();
             
             // 低于5% - 最后一次提醒并关机
-            if ( battery_percentage_ < 5 && !battery_remind_end_triggered_) {
+            if ( battery_percentage_ < 3 && !battery_remind_end_triggered_) {
                 battery_remind_end_triggered_ = true;
                 ESP_LOGW(TAG, "Battery critical: %.2fV, playing shutdown reminder", battery_voltage_);
                 
@@ -777,15 +764,10 @@ private:
                 std::string_view low_battery_off_sound(_binary_low_battery_off_ogg_start, 
                                                        _binary_low_battery_off_ogg_end - _binary_low_battery_off_ogg_start);
 
-                // 等待大模型结束讲话（最多等待 5 秒，避免死循环）
-                int wait_count = 0;
-                while (app.GetDeviceState() == kDeviceStateSpeaking && wait_count < 50) {
-                    vTaskDelay(pdMS_TO_TICKS(100));
-                    wait_count++;
-                }
+                // 等待大模型结束讲话（最多等待 5 秒）
+                WaitForSpeakingEnd(5000);
                 // 切换esp32s3 音频输出通道
                 app.PlaySound(Lang::Sounds::OGG_BATTERYOFF);
-                vTaskDelay(pdMS_TO_TICKS(2000));
                 // 5秒后关机
                 xTaskCreate([](void* arg) {
                     auto* self = static_cast<ai_martube_esp32s3*>(arg);
@@ -795,7 +777,7 @@ private:
                 }, "battery_shutdown", 4096, this, 5, nullptr);
             }
             // 等于5% - 第二次提醒
-            else if (battery_percentage_ <= 5 && !battery_remind_second_triggered_) {
+            else if (battery_percentage_ == 5 && !battery_remind_second_triggered_) {
                 battery_remind_second_triggered_ = true;
                 ESP_LOGW(TAG, "Battery low: %.2fV, playing low battery reminder", battery_voltage_);
                 
@@ -806,17 +788,11 @@ private:
                 std::string_view low_battery_remind_sound(_binary_low_battery_remind_ogg_start, 
                                                           _binary_low_battery_remind_ogg_end - _binary_low_battery_remind_ogg_start);
 
-                // 等待大模型结束讲话（最多等待 5 秒，避免死循环）
-                int wait_count = 0;
-                while (app.GetDeviceState() == kDeviceStateSpeaking && wait_count < 50) {
-                    vTaskDelay(pdMS_TO_TICKS(100));
-                    wait_count++;
-                }
+                // 等待大模型结束讲话（最多等待 5 秒）
+                WaitForSpeakingEnd(5000);
 
                 // 切换esp32s3 音频输出通道
                 app.PlaySound(Lang::Sounds::OGG_BATTERYREMIND);
-                vTaskDelay(pdMS_TO_TICKS(2000));
-
             }
             // 低于10% - 第一次提醒
             else if (battery_percentage_ <= 10 && !battery_remind_first_triggered_) {
@@ -827,20 +803,14 @@ private:
                 // 注意：需要将 low_battery_remind.ogg 放到 main/assets/common/ 目录
                 extern const char _binary_low_battery_remind_ogg_start[] asm("_binary_low_battery_remind_ogg_start");
                 extern const char _binary_low_battery_remind_ogg_end[] asm("_binary_low_battery_remind_ogg_end");
-                std::string_view low_battery_remind_sound(_binary_low_battery_remind_ogg_start, 
+                std::string_view low_battery_remind_sound(_binary_low_battery_remind_ogg_start,
                                                           _binary_low_battery_remind_ogg_end - _binary_low_battery_remind_ogg_start);
                 
-                // 等待大模型结束讲话（最多等待 5 秒，避免死循环）
-                int wait_count = 0;
-                while (app.GetDeviceState() == kDeviceStateSpeaking && wait_count < 50) {
-                    vTaskDelay(pdMS_TO_TICKS(100));
-                    wait_count++;
-                }
+                // 等待大模型结束讲话（最多等待 5 秒）
+                WaitForSpeakingEnd(5000);
 
                 // 切换esp32s3 音频输出通道
                 app.PlaySound(Lang::Sounds::OGG_BATTERYREMIND);
-                vTaskDelay(pdMS_TO_TICKS(2000));
-
             }
             
             // 如果电压回升，重置提醒状态（可选，根据需求决定）
@@ -1049,7 +1019,7 @@ public:
                     // 根据设备状态切换音频模式
                     if (cur != last) {
                         if (cur == kDeviceStateIdle) {
-                            // 连接成功后关闭呼吸灯
+                            // 连接成功后关闭呼吸灯和电机
                             if (first_connect_reminder) {
                                 if (self->boot_breath_timer_) {
                                     self->boot_breathing_ = false;
@@ -1058,6 +1028,7 @@ public:
                                 if (self->pwm_led_) {
                                     self->pwm_led_->TurnOff();
                                 }
+                                gpio_set_level(MOTOR_CONTROL_GPIO, MOTOR_CONTROL_DISABLE_LEVEL);
                                 first_connect_reminder = false;
                             }
                         }
@@ -1090,7 +1061,7 @@ public:
 
                     self->UpdateChargeStatus();
                     
-                    vTaskDelay(pdMS_TO_TICKS(10));
+                    vTaskDelay(pdMS_TO_TICKS(100));
                 }
             },
             "dev_state_monitor",
