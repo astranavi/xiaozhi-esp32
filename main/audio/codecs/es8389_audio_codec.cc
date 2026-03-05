@@ -43,7 +43,7 @@ Es8389AudioCodec::Es8389AudioCodec(void* i2c_master_handle, i2c_port_t i2c_port,
     es8389_cfg.codec_mode = ESP_CODEC_DEV_WORK_MODE_BOTH;
     es8389_cfg.pa_pin = pa_pin;
     es8389_cfg.use_mclk = use_mclk;
-    es8389_cfg.hw_gain.pa_voltage = 5.0;
+    es8389_cfg.hw_gain.pa_voltage = 4.2;
     es8389_cfg.hw_gain.codec_dac_voltage = 3.3;
     codec_if_ = es8389_codec_new(&es8389_cfg);
 
@@ -60,7 +60,7 @@ Es8389AudioCodec::Es8389AudioCodec(void* i2c_master_handle, i2c_port_t i2c_port,
     // Modify the volume curve to match the ES8389 hardware range (-95.5dB to 32.0dB)
     static esp_codec_dev_vol_map_t es8389_vol_map[] = {
         { .vol = 0, .db_value = -50.0 },
-        { .vol = 100, .db_value = -0.0 },
+        { .vol = 100, .db_value = -5.0 },
     };
     esp_codec_dev_vol_curve_t es8389_vol_curve = {
         .vol_map = es8389_vol_map,

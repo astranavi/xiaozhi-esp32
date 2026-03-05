@@ -441,10 +441,17 @@ void AudioService::EncodeWakeWord() {
 }
 
 const std::string& AudioService::GetLastWakeWord() const {
+    static const std::string empty_string;
+    if (!wake_word_) {
+        return empty_string;
+    }
     return wake_word_->GetLastDetectedWakeWord();
 }
 
 std::unique_ptr<AudioStreamPacket> AudioService::PopWakeWordPacket() {
+    if (!wake_word_) {
+        return nullptr;
+    }
     auto packet = std::make_unique<AudioStreamPacket>();
     if (wake_word_->GetWakeWordOpus(packet->payload)) {
         return packet;
@@ -616,6 +623,26 @@ void AudioService::PlaySound(const std::string_view& ogg) {
         }
 
         offset = body_off + body_size;
+    }
+}
+
+void AudioService::PlaySoundAndWait(const std::string_view& ogg, bool disable_output_after, int timeout_ms) {
+    PlaySound(ogg);
+    auto start = std::chrono::steady_clock::now();
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+        if (IsIdle()) {
+            break;
+        }
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        if (elapsed >= timeout_ms) {
+            ESP_LOGW(TAG, "PlaySoundAndWait timed out after %d ms", timeout_ms);
+            break;
+        }
+    }
+    if (disable_output_after && codec_->output_enabled()) {
+        codec_->EnableOutput(false);
     }
 }
 

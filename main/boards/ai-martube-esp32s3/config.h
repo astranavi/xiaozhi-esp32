@@ -81,8 +81,8 @@
 
 // IO-20 控制电机开关，高电平使能，低电平关闭
 #define MOTOR_CONTROL_GPIO              GPIO_NUM_20
-#define MOTOR_CONTROL_ENABLE_LEVEL      0
-#define MOTOR_CONTROL_DISABLE_LEVEL     1
+#define MOTOR_CONTROL_ENABLE_LEVEL      1
+#define MOTOR_CONTROL_DISABLE_LEVEL     0
 
 // PWM LED 配置
 #define PWM_LED_GPIO GPIO_NUM_19
