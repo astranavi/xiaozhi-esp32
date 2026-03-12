@@ -993,8 +993,7 @@ public:
                         app.PlaySound(Lang::Sounds::OGG_DISCONNECTREMIND);
                     }
                 }
-                else if (app.GetDeviceState() == kDeviceStateIdle && !bluetooth_mode_) {
-                    std::string wake_word = "你好小王子";
+                else if (app.GetDeviceState() == kDeviceStateIdle && !bluetooth_mode_)                    std::string wake_word = "你好小王子";
                     ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
                     app.WakeWordInvoke(wake_word);
                 }
